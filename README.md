@@ -126,5 +126,6 @@ SOFTWARE.
 
 
 # Authors & Contributors
-- José Rodrigues (Msc in Computer Science, @University of Coimbra) - Author
-- Tomás Gonçalves (Bsc in Computer Science, @University of Coimbra) - Contributor
+- José Rodrigues - Author
+- Tomás Gonçalves - Contributor
+
