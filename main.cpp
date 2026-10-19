@@ -29,6 +29,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <map>
+#include <memory>
 
 using namespace std;
 
@@ -39,6 +40,7 @@ vector<uint8_t> read_chunk(ifstream &file, streampos offset, size_t size) {
     file.seekg(offset);
     vector<uint8_t> buffer(size);
     file.read(reinterpret_cast<char*>(buffer.data()), size);
+    buffer.resize(static_cast<size_t>(file.gcount()));
     return buffer;
 }
 
@@ -135,7 +137,12 @@ using ValueMap = map<string, shared_ptr<Value>>;
 
 // Function to parse the 'RIFF' header
 size_t parse_riff_header(ifstream &file) {
-    vector<uint8_t> data = read_chunk(file, 0, 8);
+    vector<uint8_t> data = read_chunk(file, 0, 12);
+    if (data.size() < 12) {
+        cerr << "Invalid AVI header." << endl;
+        exit(EXIT_FAILURE);
+    }
+
     string riff_id = read_string(data, 0);
 
     if (riff_id != "RIFF") {
@@ -147,7 +154,12 @@ size_t parse_riff_header(ifstream &file) {
     uint32_t riff_size = read_int(data, offset);
     offset += 4;
     string riff_format = read_string(data, offset);
-    return offset + 4; // Return the next offset after reading the riff header
+    if (riff_format != "AVI ") {
+        cerr << "This is not a valid AVI file." << endl;
+        exit(EXIT_FAILURE);
+    }
+
+    return offset + 4;
 }
 
 // Function to parse the 'idx1' chunk
@@ -170,8 +182,8 @@ vector<ValueMap> parse_idx1(ifstream &file, size_t offset) {
         vector<uint8_t> entry = read_chunk(file, offset + 8 + i * 16, 16);
 
         string stream_id = read_string(entry, 0);
-        uint32_t stream_offset = read_int(entry, 4);
-        uint32_t size = read_int(entry, 8);
+        uint32_t stream_offset = read_int(entry, 8);
+        uint32_t size = read_int(entry, 12);
 
         // Create a map for each entry
         ValueMap entry_map;
@@ -205,28 +217,25 @@ vector<vector<int>> parse_avi_file(const string &file_path) {
         uint32_t chunk_size = read_int(chunk_header, 4);
 
         if (chunk_id == "idx1") {
-            auto idx1_entries = parse_idx1(file, offset + 8);
+            auto idx1_entries = parse_idx1(file, offset);
+            if (debug) {
+                cout << "Found idx1 at " << offset << " with " << idx1_entries.size() << " entries" << endl;
+            }
             for (const auto &entry : idx1_entries) {
-                string stream_id = entry.at("stream_id").get();
-                size_t stream_offset = entry.at("offset");
-                uint32_t size = entry.at("size");
+                string stream_id = dynamic_pointer_cast<StringValue>(entry.at("stream_id"))->getValue();
+                size_t stream_offset = dynamic_pointer_cast<IntValue>(entry.at("offset"))->getValue();
+                uint32_t size = dynamic_pointer_cast<IntValue>(entry.at("size"))->getValue();
 
                 if (size == 144000 || size == 120000) { // Check for NTSC or PAL frame size
+                    if (debug) {
+                        cout << "Frame " << stream_id << " at " << stream_offset << " (" << size << " bytes)" << endl;
+                    }
                     file.seekg(stream_offset);
                     vector<uint8_t> data = read_chunk(file, stream_offset, size);
 
                     auto results = get_dv_recording_time(data, stream_id, stream_offset);
                     if (!results.empty()) {
-                        bool found = false;
-                        for (const auto &time : timecodeDates) {
-                            if (time == results) {
-                                found = true;
-                                break;
-                            }
-                        }
-                        if (!found) {
-                            timecodeDates.push_back(results);
-                        }
+                        timecodeDates.push_back(results);
                     }
                 }
             }
@@ -250,13 +259,19 @@ int main(int argc, char* argv[]) {
     string file_path = argv[1];
     auto timecodes = parse_avi_file(file_path);
 
-    // Print timecodes
+    map<vector<int>, size_t> occurrences;
     for (const auto &timecode : timecodes) {
-        cout << "Timecode: ";
-        for (int part : timecode) {
-            cout << part << " ";
+        ++occurrences[timecode];
+    }
+
+    for (const auto &[timecode, count] : occurrences) {
+        if (count >= 3) {
+            cout << "Timecode: ";
+            for (int part : timecode) {
+                cout << part << " ";
+            }
+            cout << endl;
         }
-        cout << endl;
     }
 
     return 0;
