@@ -1,7 +1,7 @@
 CXX ?= c++
 CXXFLAGS ?= -std=c++17 -Wall -Wextra
 
-TARGET := DV2str
+TARGET := dv2str
 SOURCES := main.cpp
 
 .PHONY: all run clean

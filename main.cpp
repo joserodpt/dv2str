@@ -11,6 +11,9 @@
  *  that are compliant with the DV specification (IEC 61834-2) and that have:
  *  - SSYB packets (0x62 and 0x63) with the date and time information
  *
+ *  WARNING: The input must contain valid repeated date/time SSYB packets
+ *  (0x62 and 0x63). Files without these packets cannot be processed.
+ *
  *  Syntax: dv2str <video_file_path> [options]
  *  Options:
  *  -debug: Print debug information
@@ -264,14 +267,21 @@ int main(int argc, char* argv[]) {
         ++occurrences[timecode];
     }
 
+    bool has_repeated_timecode = false;
     for (const auto &[timecode, count] : occurrences) {
         if (count >= 3) {
+            has_repeated_timecode = true;
             cout << "Timecode: ";
             for (int part : timecode) {
                 cout << part << " ";
             }
             cout << endl;
         }
+    }
+
+    if (!has_repeated_timecode) {
+        cerr << "Warning: no valid repeated date/time packets (0x62/0x63) were found; file cannot be processed." << endl;
+        return 1;
     }
 
     return 0;

@@ -4,6 +4,9 @@ import sys
 
 '''
 
+WARNING: The input must contain valid repeated date/time SSYB packets
+(0x62 and 0x63). Files without these packets cannot be processed.
+
 AVI Header information from: https://xoax.net/sub_web/ref_dev/fileformat_avi/
 
 '''
@@ -588,6 +591,10 @@ def process_avi_file(file_path):
 
     # Sort the filtered list of timecodes by date and time (year, month, day, hour, minute, second)
     sorted_dates = sorted(count.keys(), key=lambda x: (x[2], x[1], x[0], x[3], x[4], x[5]))
+
+    if not sorted_dates:
+        print('Warning: no valid repeated date/time packets (0x62/0x63) were found; file cannot be processed.')
+        return
 
     for x in sorted_dates:
         print(f"{x[2]:02}/{x[1]:02}/{x[0]} {x[3]:02}:{x[4]:02}:{x[5]:02}")
