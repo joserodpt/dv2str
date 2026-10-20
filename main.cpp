@@ -279,8 +279,22 @@ vector<vector<int>> parse_avi_file(const string &file_path) {
                     if (debug) {
                         cout << "Frame " << stream_id << " at " << stream_offset << " (" << size << " bytes)" << endl;
                     }
-                    file.seekg(stream_offset);
-                    vector<uint8_t> data = read_chunk(file, stream_offset, size);
+
+                    // In many AVI files (notably OpenDML/AVI 2.0) the idx1 entry
+                    // offset points at the chunk HEADER (the 4-byte fourcc + the
+                    // 4-byte size), not at the DV payload. Detect that case by
+                    // checking for the fourcc at the offset and skip the 8-byte
+                    // header so the DV frame is read with the correct alignment.
+                    // Without this the whole frame is shifted by 8 bytes and the
+                    // 0x62/0x63 date/time packs are never found.
+                    size_t data_offset = stream_offset;
+                    vector<uint8_t> hdr = read_chunk(file, stream_offset, 4);
+                    if (hdr.size() == 4 && read_string(hdr, 0) == stream_id) {
+                        data_offset = stream_offset + 8;
+                    }
+
+                    file.seekg(data_offset);
+                    vector<uint8_t> data = read_chunk(file, data_offset, size);
 
                     if (debug) {
                         auto tc = get_dv_timecode(data); // {hours, minutes, seconds, frames}
