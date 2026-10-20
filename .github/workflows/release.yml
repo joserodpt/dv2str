@@ -21,12 +21,17 @@ jobs:
     # native toolchain, and the Linux/Windows binaries with Zig.
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
+      # Install Zig directly (the macOS runner is arm64). Done by hand rather
+      # than via a setup action so the workflow uses no deprecated Node 20
+      # actions, and the version stays pinned.
       - name: Install Zig
-        uses: mlugg/setup-zig@v2
-        with:
-          version: 0.17.0
+        run: |
+          ZIG_VERSION=0.17.0
+          curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-aarch64-macos-${ZIG_VERSION}.tar.xz" -o zig.tar.xz
+          tar -xf zig.tar.xz
+          echo "$PWD/zig-aarch64-macos-${ZIG_VERSION}" >> "$GITHUB_PATH"
 
       - name: Build all platforms
         run: make dist
@@ -36,7 +41,7 @@ jobs:
         run: echo "version=$(tr -d '[:space:]' < VERSION)" >> "$GITHUB_OUTPUT"
 
       - name: Publish release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3.0.3
         with:
           tag_name: v${{ steps.ver.outputs.version }}
           name: v${{ steps.ver.outputs.version }}
