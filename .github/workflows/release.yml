@@ -1,0 +1,58 @@
+name: Build & Release
+
+# Build the cross-platform binaries on every push to main and publish them to a
+# rolling "latest" release, so the download links in the README always resolve.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# Only keep the newest build running; cancel older in-progress ones.
+concurrency:
+  group: release
+  cancel-in-progress: true
+
+jobs:
+  build:
+    # macOS runner can build everything: the Universal macOS binary with the
+    # native toolchain, and the Linux/Windows binaries with Zig.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+
+      - name: Build all platforms
+        run: make dist
+
+      - name: Read version
+        id: ver
+        run: echo "version=$(tr -d '[:space:]' < VERSION)" >> "$GITHUB_OUTPUT"
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.ver.outputs.version }}
+          name: v${{ steps.ver.outputs.version }}
+          body: |
+            dv2str v${{ steps.ver.outputs.version }} — built from `main` (${{ github.sha }}).
+
+            | Platform | File |
+            |---|---|
+            | Windows (64-bit) | `dv2str-windows-x86_64.exe` |
+            | macOS (Universal) | `dv2str-macos-universal` |
+            | Linux (x86-64) | `dv2str-linux-x86_64` |
+            | Linux (ARM64) | `dv2str-linux-arm64` |
+          prerelease: false
+          make_latest: true
+          files: |
+            dist/dv2str-macos-universal
+            dist/dv2str-linux-x86_64
+            dist/dv2str-linux-arm64
+            dist/dv2str-windows-x86_64.exe
