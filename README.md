@@ -28,6 +28,7 @@ There's also a project that contains the same ideia applied for **.mp4** camcord
 - Precise extraction of Date timecodes, directly from DV (**.avi**) into **.srt** files.
 - Offers support for both **NTSC** and **PAL** streaming systems.
 - Handles both classic AVI and **OpenDML / AVI 2.0** files.
+- Batch mode: convert a whole **folder** of `.avi` files in one run (`-dir`).
 
 
 ---
@@ -79,12 +80,14 @@ After installing the update and rebooting, the program will run.
 
 ```bash
 dv2str <path_to_the_avi_file> [options]
+dv2str -dir <folder> [options]
 ```
 
 Options:
 
 | Option | Description |
 |---|---|
+| `-dir <folder>` | Process every `.avi` file in the given folder (non-recursive), writing an `.srt` next to each. Use instead of a single file path. |
 | `-debug` | Print detailed diagnostic information (including the running timecode pack `0x13`). |
 | `-pivot <0-99>` | Century pivot for the 2-digit recording year (default `50`). Years below the pivot map to `20xx`, the rest to `19xx`. |
 | `-format <spec>` | Date/time layout written to the SRT (see below). Default: day/month/year on one line, time on the next. |
@@ -96,6 +99,12 @@ Example:
 
 ```bash
 dv2str sample/DVsample.23-09-06_17-22-00.avi
+```
+
+To convert a whole folder of tapes in one go, point `-dir` at it. Files that can't be processed are reported and skipped, and the rest of the batch still runs:
+
+```bash
+dv2str -dir ~/Videos/dv-captures
 ```
 
 ### Date/time formats (`-format`)

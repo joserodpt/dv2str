@@ -15,7 +15,11 @@
  *  (0x62 and 0x63). Files without these packets cannot be processed.
  *
  *  Syntax: dv2str <video_file_path> [options]
+ *          dv2str -dir <folder> [options]
  *  Options:
+ *  -dir <folder>  : Process every .avi file in the given folder (non-recursive),
+ *                   writing an .srt next to each. Mutually exclusive with a
+ *                   single file path.
  *  -debug         : Print debug information (incl. the running timecode pack 0x13)
  *  -pivot <0-99>  : Century pivot for the 2-digit recording year (default 50).
  *                   Years below the pivot map to 20xx, the rest to 19xx.
@@ -49,6 +53,7 @@
 #include <sstream>
 #include <ctime>
 #include <clocale>
+#include <filesystem>
 
 using namespace std;
 
@@ -125,17 +130,23 @@ vector<int> get_dv_timecode(const vector<uint8_t> &data) {
     return {hours, minutes, seconds, frames};
 }
 
+// Cached copies of the last successfully decoded date/time packs. When a frame
+// is missing its date or time pack, fall back to the previously stored copy
+// rather than discarding the frame (per the reference's cached-pack fallback).
+// Cleared between files so one file's dates never leak into the next.
+static vector<uint8_t> cached_pack62;
+static vector<uint8_t> cached_pack63;
+
+void reset_recording_time_cache() {
+    cached_pack62.clear();
+    cached_pack63.clear();
+}
+
 // Function to extract date and time from the DV stream
 vector<int> get_dv_recording_time(const vector<uint8_t> &data, const string &name, size_t offset) {
     if (data.size() != 144000 && data.size() != 120000) {
         return {}; // Return an empty vector if the size is not NTSC or PAL frame size
     }
-
-    // Cached copies of the last successfully decoded packs. When a frame is
-    // missing its date or time pack, fall back to the previously stored copy
-    // rather than discarding the frame (per the reference's cached-pack fallback).
-    static vector<uint8_t> cached_pack62;
-    static vector<uint8_t> cached_pack63;
 
     auto pack62 = get_ssyb_pack(data, 0x62); // Date packet
     auto pack63 = get_ssyb_pack(data, 0x63); // Time packet
@@ -198,19 +209,20 @@ struct IntValue : public Value {
 using ValueMap = map<string, shared_ptr<Value>>;
 
 
-// Function to parse the 'RIFF' header
+// Function to parse the 'RIFF' header. Returns the offset past the header, or
+// 0 on failure (so a bad file can be skipped instead of aborting a batch run).
 size_t parse_riff_header(ifstream &file) {
     vector<uint8_t> data = read_chunk(file, 0, 12);
     if (data.size() < 12) {
         cerr << "Invalid AVI header." << endl;
-        exit(EXIT_FAILURE);
+        return 0;
     }
 
     string riff_id = read_string(data, 0);
 
     if (riff_id != "RIFF") {
         cerr << "This is not a valid AVI file." << endl;
-        exit(EXIT_FAILURE);
+        return 0;
     }
 
     size_t offset = 4;
@@ -219,7 +231,7 @@ size_t parse_riff_header(ifstream &file) {
     string riff_format = read_string(data, offset);
     if (riff_format != "AVI ") {
         cerr << "This is not a valid AVI file." << endl;
-        exit(EXIT_FAILURE);
+        return 0;
     }
 
     return offset + 4;
@@ -267,10 +279,13 @@ vector<vector<int>> parse_avi_file(const string &file_path) {
 
     if (!file.is_open()) {
         cerr << "Error opening file: " << file_path << endl;
-        exit(EXIT_FAILURE);
+        return {};
     }
 
     size_t offset = parse_riff_header(file);
+    if (offset == 0) {
+        return {};
+    }
 
     while (true) {
         vector<uint8_t> chunk_header = read_chunk(file, offset, 8);
@@ -405,8 +420,11 @@ string format_datetime(const vector<int> &d) {
 void write_dates_to_srt(const vector<vector<int>> &dates, const string &file_path) {
     string srt_path = file_path;
     const string avi_ext = ".avi";
-    if (srt_path.size() >= avi_ext.size() &&
-        srt_path.compare(srt_path.size() - avi_ext.size(), avi_ext.size(), avi_ext) == 0) {
+    string tail = (srt_path.size() >= avi_ext.size())
+        ? srt_path.substr(srt_path.size() - avi_ext.size()) : "";
+    transform(tail.begin(), tail.end(), tail.begin(),
+              [](unsigned char c) { return static_cast<char>(tolower(c)); });
+    if (tail == avi_ext) { // match .avi / .AVI / .Avi ...
         srt_path.replace(srt_path.size() - avi_ext.size(), avi_ext.size(), ".srt");
     } else {
         srt_path += ".srt";
@@ -431,14 +449,65 @@ void write_dates_to_srt(const vector<vector<int>> &dates, const string &file_pat
     }
 }
 
+// Run the full extract-and-write pipeline on one AVI file. Returns true when
+// an SRT was written.
+bool process_file(const string &file_path) {
+    reset_recording_time_cache();
+
+    auto timecodes = parse_avi_file(file_path);
+
+    // Count how often each distinct date/time appears, keeping only those that
+    // recur (>= 3 frames) to filter out transient decode noise.
+    map<vector<int>, size_t> occurrences;
+    for (const auto &timecode : timecodes) {
+        ++occurrences[timecode];
+    }
+
+    vector<vector<int>> repeated; // each: {day, month, year, hour, min, sec}
+    for (const auto &[timecode, count] : occurrences) {
+        if (count >= 3) {
+            repeated.push_back(timecode);
+        }
+    }
+
+    if (repeated.empty()) {
+        cerr << "Warning: no valid repeated date/time packets (0x62/0x63) were found; file cannot be processed." << endl;
+        return false;
+    }
+
+    // Sort chronologically: year, month, day, hour, minute, second.
+    sort(repeated.begin(), repeated.end(), [](const vector<int> &a, const vector<int> &b) {
+        return tie(a[2], a[1], a[0], a[3], a[4], a[5]) < tie(b[2], b[1], b[0], b[3], b[4], b[5]);
+    });
+
+    for (const auto &d : repeated) {
+        cout << setfill('0') << setw(2) << d[0] << "/" << setw(2) << d[1] << "/" << d[2]
+             << " " << setw(2) << d[3] << ":" << setw(2) << d[4] << ":" << setw(2) << d[5]
+             << setfill(' ') << endl;
+    }
+
+    write_dates_to_srt(repeated, file_path);
+
+    return true;
+}
+
 int main(int argc, char* argv[]) {
     string file_path;
+    string dir_path;           // folder of .avi files to process, when requested
     string locale_name;        // locale for month/weekday names, when requested
     bool locale_requested = false;
     for (int i = 1; i < argc; ++i) {
         string arg = argv[i];
         if (arg == "-debug") {
             debug = true;
+        } else if (arg == "-dir") {
+            if (i + 1 >= argc) {
+                cerr << "Error: -dir requires a folder path." << endl;
+                return 1;
+            }
+            dir_path = argv[++i];
+        } else if (arg.rfind("-dir=", 0) == 0) {
+            dir_path = arg.substr(5);
         } else if (arg == "-pivot") {
             if (i + 1 >= argc) {
                 cerr << "Error: -pivot requires a value (0-99)." << endl;
@@ -473,8 +542,12 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    if (file_path.empty()) {
+    if (file_path.empty() == dir_path.empty()) { // neither given, or both given
         cerr << "dv2str <video_file_path> [-debug] [-pivot <0-99>] [-format <spec>] [-locale <name>]" << endl;
+        cerr << "dv2str -dir <folder> [-debug] [-pivot <0-99>] [-format <spec>] [-locale <name>]" << endl;
+        if (!file_path.empty()) {
+            cerr << "Error: give either a single file path or -dir <folder>, not both." << endl;
+        }
         return 1;
     }
 
@@ -493,39 +566,47 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    auto timecodes = parse_avi_file(file_path);
-
-    // Count how often each distinct date/time appears, keeping only those that
-    // recur (>= 3 frames) to filter out transient decode noise.
-    map<vector<int>, size_t> occurrences;
-    for (const auto &timecode : timecodes) {
-        ++occurrences[timecode];
+    if (!file_path.empty()) {
+        return process_file(file_path) ? 0 : 1;
     }
 
-    vector<vector<int>> repeated; // each: {day, month, year, hour, min, sec}
-    for (const auto &[timecode, count] : occurrences) {
-        if (count >= 3) {
-            repeated.push_back(timecode);
-        }
-    }
-
-    if (repeated.empty()) {
-        cerr << "Warning: no valid repeated date/time packets (0x62/0x63) were found; file cannot be processed." << endl;
+    // -dir mode: process every .avi file in the folder (non-recursive). A file
+    // that fails is reported and skipped so the rest of the batch still runs.
+    namespace fs = std::filesystem;
+    error_code ec;
+    if (!fs::is_directory(dir_path, ec)) {
+        cerr << "Error: '" << dir_path << "' is not a folder." << endl;
         return 1;
     }
 
-    // Sort chronologically: year, month, day, hour, minute, second.
-    sort(repeated.begin(), repeated.end(), [](const vector<int> &a, const vector<int> &b) {
-        return tie(a[2], a[1], a[0], a[3], a[4], a[5]) < tie(b[2], b[1], b[0], b[3], b[4], b[5]);
-    });
+    vector<string> avi_files;
+    for (const auto &entry : fs::directory_iterator(dir_path, ec)) {
+        if (!entry.is_regular_file(ec)) continue;
+        string ext = entry.path().extension().string();
+        transform(ext.begin(), ext.end(), ext.begin(),
+                  [](unsigned char c) { return static_cast<char>(tolower(c)); });
+        if (ext == ".avi") {
+            avi_files.push_back(entry.path().string());
+        }
+    }
+    if (ec) {
+        cerr << "Error reading folder '" << dir_path << "': " << ec.message() << endl;
+        return 1;
+    }
+    if (avi_files.empty()) {
+        cerr << "Error: no .avi files found in '" << dir_path << "'." << endl;
+        return 1;
+    }
+    sort(avi_files.begin(), avi_files.end()); // deterministic order
 
-    for (const auto &d : repeated) {
-        cout << setfill('0') << setw(2) << d[0] << "/" << setw(2) << d[1] << "/" << d[2]
-             << " " << setw(2) << d[3] << ":" << setw(2) << d[4] << ":" << setw(2) << d[5]
-             << setfill(' ') << endl;
+    size_t ok = 0;
+    for (const auto &path : avi_files) {
+        cout << "Processing " << path << endl;
+        if (process_file(path)) {
+            ++ok;
+        }
     }
 
-    write_dates_to_srt(repeated, file_path);
-
-    return 0;
+    cout << "Done: " << ok << " of " << avi_files.size() << " file(s) processed." << endl;
+    return (ok == avi_files.size()) ? 0 : 1;
 }
