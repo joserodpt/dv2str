@@ -15,7 +15,7 @@
 
 ## Project Overview
 
-The **DV Timecode Extractor Tool** is a program developed in **Python**, and later on converted to **C++**, to extract the **timecode** data (following the **DD** / **MM** / **YYYY** **HH** : **mm** : **ss** Format) from **DV video streams**, encapsulated in **.avi** files, and generate **.srt** files, that could be ser embedded in **.mp4** containers.
+The **DV Timecode Extractor Tool** is a **C++** program to extract the **recording date & time** data (following the **DD** / **MM** / **YYYY** **HH** : **mm** : **ss** Format) from **DV video streams**, encapsulated in **.avi** files, and generate **.srt** files, that could then be embedded in **.mp4** containers.
 
 There's also a project that contains the same ideia applied for **.mp4** camcorder files, called [mp4str](https://github.com/joserodpt/mp42str).
 
@@ -66,8 +66,8 @@ NOTE: The source code in this project uses logic similar to that found in WinDV(
 - **parse_idx1(file, offset)**: Locates the chunks index on the file.
 
 
-### Debugging with *d* Flag
-The -d (debug) flag provides detailed information when executing the program, to assist in troubleshooting. 
+### Debugging with the *-debug* Flag
+Passing a second argument (e.g. `-debug`) provides detailed information when executing the program, to assist in troubleshooting. 
 When enabled, the program outputs:
 - Raw DV packet data for inspection.
 - Frame timecodes and subcodes extracted from the AVI file.
@@ -79,21 +79,28 @@ This is particularly useful for validating DV data integrity and analyzing speci
 ---
 
 
-## How to Install
+## How to Build & Run
 
 1. **First, make sure you have:**
-    - Python 3.x installed.
-    - NOTE: It is not mandatory (but certainly advisable) that all the main Python Libraries are already pre-installed and fully working on your device.
+    - A C++17-capable compiler (e.g. `g++` or `clang++`).
+    - `make` (optional, a `Makefile` is provided).
 
 2. **Clone this repository using git (NOTE: although not recommended, you can opt to download this repository directly from the GitHub source).**
 
-3. **Execute the main script**:
+3. **Build the program**:
     ```bash
-    python main.py <path_to_the_avi_file>
+    make
+    # or, without make:
+    c++ -std=c++17 -Wall -Wextra main.cpp -o dv2str
     ```
 
-4. **Output**:
-   - The Date and timecode will then be shown on your device's Terminal.
+4. **Run it**:
+    ```bash
+    ./dv2str <path_to_the_avi_file> [-debug]
+    ```
+
+5. **Output**:
+   - The Date and time will then be shown on your device's Terminal.
 
 
 ---
