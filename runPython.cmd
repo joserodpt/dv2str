@@ -1,1 +1,0 @@
-python main.py ./sample/DVsample.23-09-06_17-22-00.avi
