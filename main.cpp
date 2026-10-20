@@ -26,6 +26,9 @@
  *                   strftime pattern, e.g. "%d %B %Y" -> "23 September 2006".
  *                   Use \n / \t for a newline / tab. Default: "%d/%m/%Y\n%H:%M:%S"
  *                   (day/month/year on one line, time on the next).
+ *  -locale <name> : Locale for month/weekday names (%A, %B, ...). e.g.
+ *                   "it_IT.UTF-8" -> "lunedì", "ottobre". Pass "" to use the
+ *                   system's default locale. Must be installed on the system.
  *
  *  This program is licensed under the MIT License.
  *  (c) José Rodrigues, Tomás Gonçalves 2024
@@ -45,6 +48,7 @@
 #include <algorithm>
 #include <sstream>
 #include <ctime>
+#include <clocale>
 
 using namespace std;
 
@@ -429,6 +433,8 @@ void write_dates_to_srt(const vector<vector<int>> &dates, const string &file_pat
 
 int main(int argc, char* argv[]) {
     string file_path;
+    string locale_name;        // locale for month/weekday names, when requested
+    bool locale_requested = false;
     for (int i = 1; i < argc; ++i) {
         string arg = argv[i];
         if (arg == "-debug") {
@@ -449,6 +455,16 @@ int main(int argc, char* argv[]) {
             date_format = resolve_date_format(argv[++i]);
         } else if (arg.rfind("-format=", 0) == 0) {
             date_format = resolve_date_format(arg.substr(8));
+        } else if (arg == "-locale") {
+            if (i + 1 >= argc) {
+                cerr << "Error: -locale requires a value (e.g. it_IT.UTF-8, or \"\" for the system default)." << endl;
+                return 1;
+            }
+            locale_name = argv[++i];
+            locale_requested = true;
+        } else if (arg.rfind("-locale=", 0) == 0) {
+            locale_name = arg.substr(8);
+            locale_requested = true;
         } else if (!arg.empty() && arg[0] != '-') {
             file_path = arg;
         } else {
@@ -458,13 +474,23 @@ int main(int argc, char* argv[]) {
     }
 
     if (file_path.empty()) {
-        cerr << "dv2str <video_file_path> [-debug] [-pivot <0-99>] [-format <spec>]" << endl;
+        cerr << "dv2str <video_file_path> [-debug] [-pivot <0-99>] [-format <spec>] [-locale <name>]" << endl;
         return 1;
     }
 
     if (century_pivot < 0 || century_pivot > 99) {
         cerr << "Error: -pivot must be between 0 and 99." << endl;
         return 1;
+    }
+
+    // Apply the requested locale so strftime renders localized month/weekday
+    // names (e.g. Italian "lunedì"/"ottobre"). Only affects the C library used
+    // by format_datetime; terminal integer output is unchanged.
+    if (locale_requested) {
+        if (!setlocale(LC_ALL, locale_name.c_str())) {
+            cerr << "Warning: locale '" << locale_name
+                 << "' is not available on this system; using the default." << endl;
+        }
     }
 
     auto timecodes = parse_avi_file(file_path);

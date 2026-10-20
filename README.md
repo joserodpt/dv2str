@@ -88,6 +88,7 @@ Options:
 | `-debug` | Print detailed diagnostic information (including the running timecode pack `0x13`). |
 | `-pivot <0-99>` | Century pivot for the 2-digit recording year (default `50`). Years below the pivot map to `20xx`, the rest to `19xx`. |
 | `-format <spec>` | Date/time layout written to the SRT (see below). Default: day/month/year on one line, time on the next. |
+| `-locale <name>` | Language for month and weekday names (`%A`, `%B`, …). E.g. `it_IT.UTF-8` → `lunedì`, `ottobre`. Pass `""` to use the system default. |
 
 The extracted date/time is printed to the terminal, and an **`.srt`** file is written next to the source `.avi` (one 1-second subtitle per second of footage).
 
@@ -122,6 +123,21 @@ dv2str movie.avi -format "%Y-%m-%d\n%H:%M:%S"         # 2006-09-23 (newline) 17:
 ```
 
 Common fields: `%d` day, `%m` month number, `%B` full month name, `%b` short month, `%Y` 4-digit year, `%H:%M:%S` time, `%A` weekday.
+
+### Localized names (`-locale`)
+
+By default month and weekday names are in English. Use `-locale` to render them in another language (the locale must be installed on your system):
+
+```bash
+dv2str movie.avi -locale it_IT.UTF-8 -format "%A %d %B %Y"   # sabato 23 settembre 2006
+dv2str movie.avi -locale it_IT.UTF-8 -format "%A %d %b %Y"   # sabato 23 set 2006
+dv2str movie.avi -locale "" -format "%A %d %B %Y"            # use the system's default locale
+```
+
+Locale names differ by platform:
+
+- **macOS / Linux**: `it_IT.UTF-8`, `pt_PT.UTF-8`, `fr_FR.UTF-8`, … On Linux the locale may need to be generated first (e.g. `sudo locale-gen it_IT.UTF-8`). List what's installed with `locale -a`.
+- **Windows**: use names like `Italian_Italy`, `Portuguese_Portugal`, or BCP-47 tags such as `it-IT`.
 
 
 ---
