@@ -16,11 +16,16 @@
  *
  *  Syntax: dv2str <video_file_path> [options]
  *  Options:
- *  -debug        : Print debug information (incl. the running timecode pack 0x13)
- *  -pivot <0-99> : Century pivot for the 2-digit recording year (default 50).
- *                  Years below the pivot map to 20xx, the rest to 19xx.
- *                  The DV spec's own suggested pivot is 25; 50 is used here so
- *                  that typical 2000s-era camcorder footage decodes correctly.
+ *  -debug         : Print debug information (incl. the running timecode pack 0x13)
+ *  -pivot <0-99>  : Century pivot for the 2-digit recording year (default 50).
+ *                   Years below the pivot map to 20xx, the rest to 19xx.
+ *                   The DV spec's own suggested pivot is 25; 50 is used here so
+ *                   that typical 2000s-era camcorder footage decodes correctly.
+ *  -format <spec> : Date/time layout written to the SRT. Accepts a preset name
+ *                   (default, inline, long, long-inline, iso, date, time) or any
+ *                   strftime pattern, e.g. "%d %B %Y" -> "23 September 2006".
+ *                   Use \n / \t for a newline / tab. Default: "%d/%m/%Y\n%H:%M:%S"
+ *                   (day/month/year on one line, time on the next).
  *
  *  This program is licensed under the MIT License.
  *  (c) José Rodrigues, Tomás Gonçalves 2024
@@ -39,11 +44,16 @@
 #include <memory>
 #include <algorithm>
 #include <sstream>
+#include <ctime>
 
 using namespace std;
 
 bool debug;
 int century_pivot = 50; // 2-digit years below this map to 20xx, the rest to 19xx
+
+// strftime pattern for the date/time written to each SRT entry. The default
+// keeps the original layout: day/month/year on one line, time on the next.
+string date_format = "%d/%m/%Y\n%H:%M:%S";
 
 // Function to read data from the file at a specific offset
 vector<uint8_t> read_chunk(ifstream &file, streampos offset, size_t size) {
@@ -332,6 +342,60 @@ string format_seconds(int total_seconds) {
     return out.str();
 }
 
+// Resolve a -format value to a strftime pattern. A handful of friendly preset
+// names map to common layouts; anything else is treated as a literal strftime
+// pattern. The escape sequences \n and \t are turned into real characters so
+// multi-line layouts can be given on the command line.
+string resolve_date_format(const string &spec) {
+    static const map<string, string> presets = {
+        {"default",     "%d/%m/%Y\n%H:%M:%S"}, // day/month/year, then time
+        {"inline",      "%d/%m/%Y %H:%M:%S"},
+        {"long",        "%d %B %Y\n%H:%M:%S"}, // e.g. 23 September 2006
+        {"long-inline", "%d %B %Y %H:%M:%S"},
+        {"iso",         "%Y-%m-%d %H:%M:%S"},
+        {"date",        "%d/%m/%Y"},
+        {"time",        "%H:%M:%S"},
+    };
+
+    auto it = presets.find(spec);
+    const string &pattern = (it != presets.end()) ? it->second : spec;
+
+    string out;
+    for (size_t i = 0; i < pattern.size(); ++i) {
+        if (pattern[i] == '\\' && i + 1 < pattern.size()) {
+            char c = pattern[i + 1];
+            if (c == 'n') { out += '\n'; ++i; continue; }
+            if (c == 't') { out += '\t'; ++i; continue; }
+        }
+        out += pattern[i];
+    }
+    return out;
+}
+
+// Format one {day, month, year, hour, min, sec} entry using date_format.
+string format_datetime(const vector<int> &d) {
+    std::tm tm{};
+    tm.tm_mday = d[0];
+    tm.tm_mon  = d[1] - 1;    // tm_mon is 0-based
+    tm.tm_year = d[2] - 1900; // tm_year counts from 1900
+    tm.tm_hour = d[3];
+    tm.tm_min  = d[4];
+    tm.tm_sec  = d[5];
+    tm.tm_isdst = -1;
+
+    // Fill tm_wday / tm_yday (needed for %A, %a, %j) from a normalized copy,
+    // without letting mktime's timezone/DST handling shift the displayed time.
+    std::tm tmp = tm;
+    if (std::mktime(&tmp) != static_cast<std::time_t>(-1)) {
+        tm.tm_wday = tmp.tm_wday;
+        tm.tm_yday = tmp.tm_yday;
+    }
+
+    char buf[256];
+    size_t n = std::strftime(buf, sizeof(buf), date_format.c_str(), &tm);
+    return string(buf, n);
+}
+
 // Write the extracted dates (each {day, month, year, hour, min, sec}) to an SRT
 // file alongside the source, one 1-second subtitle per entry.
 void write_dates_to_srt(const vector<vector<int>> &dates, const string &file_path) {
@@ -357,8 +421,7 @@ void write_dates_to_srt(const vector<vector<int>> &dates, const string &file_pat
         const auto &d = dates[i]; // {day, month, year, hour, min, sec}
         f << (i + 1) << "\n";
         f << format_seconds(previous_time) << " --> " << format_seconds(previous_time + 1) << "\n";
-        f << setfill('0') << setw(2) << d[0] << "/" << setw(2) << d[1] << "/" << d[2] << "\n";
-        f << setw(2) << d[3] << ":" << setw(2) << d[4] << ":" << setw(2) << d[5] << setfill(' ') << "\n";
+        f << format_datetime(d) << "\n";
         f << "\n";
         previous_time += 1;
     }
@@ -378,6 +441,14 @@ int main(int argc, char* argv[]) {
             century_pivot = atoi(argv[++i]);
         } else if (arg.rfind("-pivot=", 0) == 0) {
             century_pivot = atoi(arg.c_str() + 7);
+        } else if (arg == "-format") {
+            if (i + 1 >= argc) {
+                cerr << "Error: -format requires a value (a preset name or strftime pattern)." << endl;
+                return 1;
+            }
+            date_format = resolve_date_format(argv[++i]);
+        } else if (arg.rfind("-format=", 0) == 0) {
+            date_format = resolve_date_format(arg.substr(8));
         } else if (!arg.empty() && arg[0] != '-') {
             file_path = arg;
         } else {
@@ -387,7 +458,7 @@ int main(int argc, char* argv[]) {
     }
 
     if (file_path.empty()) {
-        cerr << "dv2str <video_file_path> [-debug] [-pivot <0-99>]" << endl;
+        cerr << "dv2str <video_file_path> [-debug] [-pivot <0-99>] [-format <spec>]" << endl;
         return 1;
     }
 

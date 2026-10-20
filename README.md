@@ -87,6 +87,7 @@ Options:
 |---|---|
 | `-debug` | Print detailed diagnostic information (including the running timecode pack `0x13`). |
 | `-pivot <0-99>` | Century pivot for the 2-digit recording year (default `50`). Years below the pivot map to `20xx`, the rest to `19xx`. |
+| `-format <spec>` | Date/time layout written to the SRT (see below). Default: day/month/year on one line, time on the next. |
 
 The extracted date/time is printed to the terminal, and an **`.srt`** file is written next to the source `.avi` (one 1-second subtitle per second of footage).
 
@@ -95,6 +96,32 @@ Example:
 ```bash
 dv2str sample/DVsample.23-09-06_17-22-00.avi
 ```
+
+### Date/time formats (`-format`)
+
+`-format` accepts either a **preset name** or any **`strftime` pattern**.
+
+Presets:
+
+| Preset | Example output |
+|---|---|
+| `default` | `23/09/2006` + `17:22:54` (two lines) |
+| `inline` | `23/09/2006 17:22:54` |
+| `long` | `23 September 2006` + `17:22:54` (two lines) |
+| `long-inline` | `23 September 2006 17:22:54` |
+| `iso` | `2006-09-23 17:22:54` |
+| `date` | `23/09/2006` |
+| `time` | `17:22:54` |
+
+For full control, pass a [`strftime`](https://en.cppreference.com/w/cpp/chrono/c/strftime) pattern directly (use `\n` / `\t` for a newline / tab):
+
+```bash
+dv2str movie.avi -format "%d %B %Y"                   # 23 September 2006
+dv2str movie.avi -format "%A, %d %B %Y - %H:%M:%S"    # Saturday, 23 September 2006 - 17:22:54
+dv2str movie.avi -format "%Y-%m-%d\n%H:%M:%S"         # 2006-09-23 (newline) 17:22:54
+```
+
+Common fields: `%d` day, `%m` month number, `%B` full month name, `%b` short month, `%Y` 4-digit year, `%H:%M:%S` time, `%A` weekday.
 
 
 ---
