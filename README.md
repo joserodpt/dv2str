@@ -1,14 +1,18 @@
 # DV2str - A DV Timecode Extractor Tool
 
 ## Table of Content
-- [Project Overview](#why-do-i-need-the-dv-timecode-extractor-tool)
+- [Project Overview](#project-overview)
 - [Features](#features)
+- [Download](#download)
+  - [Supported platforms](#supported-platforms)
+  - [Windows 7 / 8 / 8.1 note](#windows-7--8--81-note)
+- [Usage](#usage)
 - [How DV2str Works](#how-dv2str-works)
 - [(.avi) file format - Header References](#avi-file-format---header-references)
 - [DV Format in .avi](#dv-format-in-avi)
 - [Main Functions](#main-functions)
-- [Debug](#debugging-with-d-flag)
-- [How to Install](#how-to-install)
+- [Debug](#debugging-with-the-debug-flag)
+- [Build from Source](#build-from-source)
 - [License](#license)
 - [Authors & Contributors](#authors--contributors)
 
@@ -23,6 +27,74 @@ There's also a project that contains the same ideia applied for **.mp4** camcord
 
 - Precise extraction of Date timecodes, directly from DV (**.avi**) into **.srt** files.
 - Offers support for both **NTSC** and **PAL** streaming systems.
+- Handles both classic AVI and **OpenDML / AVI 2.0** files.
+
+
+---
+
+
+## Download
+
+Prebuilt binaries are published on the [**Releases**](https://github.com/joserodpt/dv2str/releases/latest) page. Grab the one for your system:
+
+| Platform | Download |
+|---|---|
+| **Windows** (64-bit) | [dv2str-windows-x86_64.exe](https://github.com/joserodpt/dv2str/releases/latest/download/dv2str-windows-x86_64.exe) |
+| **macOS** (Universal: Apple Silicon + Intel) | [dv2str-macos-universal](https://github.com/joserodpt/dv2str/releases/latest/download/dv2str-macos-universal) |
+| **Linux** (x86-64) | [dv2str-linux-x86_64](https://github.com/joserodpt/dv2str/releases/latest/download/dv2str-linux-x86_64) |
+| **Linux** (ARM64) | [dv2str-linux-arm64](https://github.com/joserodpt/dv2str/releases/latest/download/dv2str-linux-arm64) |
+
+On macOS and Linux, make the file executable after downloading:
+
+```bash
+chmod +x dv2str-*
+```
+
+> On macOS, the first launch may be blocked by Gatekeeper because the binary is unsigned. Allow it under **System Settings → Privacy & Security**, or run `xattr -d com.apple.quarantine dv2str-macos-universal`.
+
+### Supported platforms
+
+| OS | Supported versions | Notes |
+|---|---|---|
+| **Windows** | Windows 7 SP1 and later (64-bit) | On Windows 7/8/8.1 the Universal C Runtime must be present — see the note below. Built-in on Windows 10/11. |
+| **macOS** | macOS 11 (Big Sur) and later | Single Universal binary runs natively on both Apple Silicon and Intel. |
+| **Linux** | Any modern 64-bit distribution (x86-64 or ARM64) | Statically linked against musl — no glibc or other runtime dependencies. |
+
+### Windows 7 / 8 / 8.1 note
+
+The Windows build depends on the **Universal C Runtime (UCRT)**. This ships built-in with Windows 10 and 11, so no extra steps are needed there.
+
+On **Windows 7 SP1, 8, and 8.1** the UCRT is only present if the system has been kept up to date through Windows Update. If the program fails to start with an error about a missing `api-ms-win-crt-*.dll`, install Microsoft's free update:
+
+- **Update for Universal C Runtime in Windows (KB2999226):** <https://support.microsoft.com/en-us/help/2999226>
+- Direct downloads (Microsoft Download Center): <https://www.microsoft.com/en-us/download/details.aspx?id=48234> — pick the `.msu` for your system, e.g. `Windows6.1-KB2999226-x64.msu` for 64-bit Windows 7 SP1.
+
+After installing the update and rebooting, the program will run.
+
+
+---
+
+
+## Usage
+
+```bash
+dv2str <path_to_the_avi_file> [options]
+```
+
+Options:
+
+| Option | Description |
+|---|---|
+| `-debug` | Print detailed diagnostic information (including the running timecode pack `0x13`). |
+| `-pivot <0-99>` | Century pivot for the 2-digit recording year (default `50`). Years below the pivot map to `20xx`, the rest to `19xx`. |
+
+The extracted date/time is printed to the terminal, and an **`.srt`** file is written next to the source `.avi` (one 1-second subtitle per second of footage).
+
+Example:
+
+```bash
+dv2str sample/DVsample.23-09-06_17-22-00.avi
+```
 
 
 ---
@@ -67,7 +139,7 @@ NOTE: The source code in this project uses logic similar to that found in WinDV(
 
 
 ### Debugging with the *-debug* Flag
-Passing a second argument (e.g. `-debug`) provides detailed information when executing the program, to assist in troubleshooting. 
+Passing the `-debug` flag provides detailed information when executing the program, to assist in troubleshooting.
 When enabled, the program outputs:
 - Raw DV packet data for inspection.
 - Frame timecodes and subcodes extracted from the AVI file.
@@ -79,28 +151,34 @@ This is particularly useful for validating DV data integrity and analyzing speci
 ---
 
 
-## How to Build & Run
+## Build from Source
 
-1. **First, make sure you have:**
-    - A C++17-capable compiler (e.g. `g++` or `clang++`).
-    - `make` (optional, a `Makefile` is provided).
+### Requirements
 
-2. **Clone this repository using git (NOTE: although not recommended, you can opt to download this repository directly from the GitHub source).**
+- A C++17-capable compiler (e.g. `g++` or `clang++`) for a native build.
+- `make` (a `Makefile` is provided).
+- [Zig](https://ziglang.org/download/) (`brew install zig`) — only needed for the Linux/Windows cross builds.
 
-3. **Build the program**:
-    ```bash
-    make
-    # or, without make:
-    c++ -std=c++17 -Wall -Wextra main.cpp -o dv2str
-    ```
+### Native build
 
-4. **Run it**:
-    ```bash
-    ./dv2str <path_to_the_avi_file> [-debug]
-    ```
+```bash
+make
+# or, without make:
+c++ -std=c++17 -Wall -Wextra -O2 main.cpp -o dv2str
+```
 
-5. **Output**:
-   - The Date and time will then be shown on your device's Terminal.
+### Cross-compiling release binaries
+
+The `Makefile` can produce binaries for every supported platform into `dist/`:
+
+```bash
+make dist          # build macOS, Linux (x86-64 + ARM64) and Windows binaries
+```
+
+Individual targets are also available: `make macos`, `make linux`, `make linux-arm`, `make windows`.
+
+- **macOS** is built with the native toolchain as a Universal binary (`-arch arm64 -arch x86_64`), so it must be built on macOS.
+- **Linux** and **Windows** are built with `zig c++` and are statically linked, so they run without any runtime dependencies (aside from the Windows 7/8/8.1 UCRT note above).
 
 
 ---
@@ -135,4 +213,3 @@ SOFTWARE.
 # Authors & Contributors
 - José Rodrigues - Author
 - Tomás Gonçalves - Contributor
-
