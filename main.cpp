@@ -16,7 +16,11 @@
  *
  *  Syntax: dv2str <video_file_path> [options]
  *  Options:
- *  -debug: Print debug information
+ *  -debug        : Print debug information (incl. the running timecode pack 0x13)
+ *  -pivot <0-99> : Century pivot for the 2-digit recording year (default 50).
+ *                  Years below the pivot map to 20xx, the rest to 19xx.
+ *                  The DV spec's own suggested pivot is 25; 50 is used here so
+ *                  that typical 2000s-era camcorder footage decodes correctly.
  *
  *  This program is licensed under the MIT License.
  *  (c) José Rodrigues, Tomás Gonçalves 2024
@@ -33,10 +37,13 @@
 #include <cstdlib>
 #include <map>
 #include <memory>
+#include <algorithm>
+#include <sstream>
 
 using namespace std;
 
 bool debug;
+int century_pivot = 50; // 2-digit years below this map to 20xx, the rest to 19xx
 
 // Function to read data from the file at a specific offset
 vector<uint8_t> read_chunk(ifstream &file, streampos offset, size_t size) {
@@ -57,21 +64,51 @@ string read_string(const vector<uint8_t> &data, size_t offset) {
     return string(reinterpret_cast<const char*>(&data[offset]), 4);
 }
 
-// Function to find the SSYB packet with the given packet number
+// Function to find the first 5-byte pack with the given ID in a DV frame.
+// Scans each DIF sequence's subcode region (timecode 0x13) and then its VAUX
+// region (rec date 0x62 / rec time 0x63), mirroring the reference finder.
 vector<uint8_t> get_ssyb_pack(const vector<uint8_t> &data, uint8_t pack_num) {
-    size_t seq_count = (data.size() >= 144000) ? 12 : 10; // PAL (10 sequences) or NTSC (12 sequences)
+    size_t seq_count = (data.size() >= 144000) ? 12 : 10; // PAL (12 sequences) or NTSC (10 sequences)
 
     for (size_t i = 0; i < seq_count; ++i) {
-        for (size_t j = 0; j < 2; ++j) { // Each sequence has two DIF blocks with subcode data
-            for (size_t k = 0; k < 6; ++k) { // Each block contains 6 packets
-                size_t offset = i * 150 * 80 + j * 80 + 3 + k * 8 + 3;
+        size_t base = i * 150 * 80; // 12000-byte DIF sequence
+
+        // SUBCODE: DIF blocks 1-2, 6 packs each, stride 8
+        for (size_t block = 1; block <= 2; ++block) {
+            for (size_t k = 0; k < 6; ++k) {
+                size_t offset = base + block * 0x50 + 3 + k * 8 + 3;
+                if (offset + 5 > data.size()) continue;
                 if (data[offset] == pack_num) {
-                    return vector<uint8_t>(data.begin() + offset, data.begin() + offset + 8);
+                    return vector<uint8_t>(data.begin() + offset, data.begin() + offset + 5);
+                }
+            }
+        }
+
+        // VAUX: DIF blocks 1-3, 15 packs each, stride 5
+        for (size_t block = 1; block <= 3; ++block) {
+            for (size_t k = 1; k <= 15; ++k) {
+                size_t offset = base + block * 0x50 + 0x9e + k * 5;
+                if (offset + 5 > data.size()) continue;
+                if (data[offset] == pack_num) {
+                    return vector<uint8_t>(data.begin() + offset, data.begin() + offset + 5);
                 }
             }
         }
     }
     return {}; // Return an empty vector if the packet is not found
+}
+
+// Decode the running timecode pack (0x13) into {hours, minutes, seconds, frames}.
+vector<int> get_dv_timecode(const vector<uint8_t> &data) {
+    auto pack = get_ssyb_pack(data, 0x13);
+    if (pack.empty()) {
+        return {};
+    }
+    int frames  = (pack[1] & 0xf) + 10 * ((pack[1] >> 4) & 0x3); // tens: 2 bits
+    int seconds = (pack[2] & 0xf) + 10 * ((pack[2] >> 4) & 0x7); // tens: 3 bits
+    int minutes = (pack[3] & 0xf) + 10 * ((pack[3] >> 4) & 0x7); // tens: 3 bits
+    int hours   = (pack[4] & 0xf) + 10 * ((pack[4] >> 4) & 0x3); // tens: 2 bits
+    return {hours, minutes, seconds, frames};
 }
 
 // Function to extract date and time from the DV stream
@@ -80,17 +117,26 @@ vector<int> get_dv_recording_time(const vector<uint8_t> &data, const string &nam
         return {}; // Return an empty vector if the size is not NTSC or PAL frame size
     }
 
+    // Cached copies of the last successfully decoded packs. When a frame is
+    // missing its date or time pack, fall back to the previously stored copy
+    // rather than discarding the frame (per the reference's cached-pack fallback).
+    static vector<uint8_t> cached_pack62;
+    static vector<uint8_t> cached_pack63;
+
     auto pack62 = get_ssyb_pack(data, 0x62); // Date packet
     auto pack63 = get_ssyb_pack(data, 0x63); // Time packet
 
+    if (pack62.empty()) pack62 = cached_pack62; else cached_pack62 = pack62;
+    if (pack63.empty()) pack63 = cached_pack63; else cached_pack63 = pack63;
+
     if (pack62.empty() || pack63.empty()) {
-        return {}; // Could not find required packets
+        return {}; // Could not find required packets and no cached copy available
     }
 
     int day = (pack62[2] & 0xf) + 10 * ((pack62[2] >> 4) & 0x3);
     int month = (pack62[3] & 0xf) + 10 * ((pack62[3] >> 4) & 0x1);
     int year = (pack62[4] & 0xf) + 10 * ((pack62[4] >> 4) & 0xf);
-    year += (year < 50) ? 2000 : 1900;
+    year += (year < century_pivot) ? 2000 : 1900;
 
     int sec = (pack63[2] & 0xf) + 10 * ((pack63[2] >> 4) & 0x7);
     int min = (pack63[3] & 0xf) + 10 * ((pack63[3] >> 4) & 0x7);
@@ -236,6 +282,16 @@ vector<vector<int>> parse_avi_file(const string &file_path) {
                     file.seekg(stream_offset);
                     vector<uint8_t> data = read_chunk(file, stream_offset, size);
 
+                    if (debug) {
+                        auto tc = get_dv_timecode(data); // {hours, minutes, seconds, frames}
+                        if (!tc.empty()) {
+                            cout << "  timecode (0x13): "
+                                 << setfill('0') << setw(2) << tc[0] << ":"
+                                 << setw(2) << tc[1] << ":" << setw(2) << tc[2]
+                                 << ":" << setw(2) << tc[3] << setfill(' ') << endl;
+                        }
+                    }
+
                     auto results = get_dv_recording_time(data, stream_id, stream_offset);
                     if (!results.empty()) {
                         timecodeDates.push_back(results);
@@ -251,38 +307,114 @@ vector<vector<int>> parse_avi_file(const string &file_path) {
     return timecodeDates;
 }
 
+// Format a whole number of seconds into the SRT time format HH:MM:SS,mmm.
+string format_seconds(int total_seconds) {
+    int hours = total_seconds / 3600;
+    int minutes = (total_seconds % 3600) / 60;
+    int seconds = total_seconds % 60;
+    ostringstream out;
+    out << setfill('0') << setw(2) << hours << ":"
+        << setw(2) << minutes << ":" << setw(2) << seconds << ",000";
+    return out.str();
+}
+
+// Write the extracted dates (each {day, month, year, hour, min, sec}) to an SRT
+// file alongside the source, one 1-second subtitle per entry.
+void write_dates_to_srt(const vector<vector<int>> &dates, const string &file_path) {
+    string srt_path = file_path;
+    const string avi_ext = ".avi";
+    if (srt_path.size() >= avi_ext.size() &&
+        srt_path.compare(srt_path.size() - avi_ext.size(), avi_ext.size(), avi_ext) == 0) {
+        srt_path.replace(srt_path.size() - avi_ext.size(), avi_ext.size(), ".srt");
+    } else {
+        srt_path += ".srt";
+    }
+
+    ofstream f(srt_path);
+    if (!f.is_open()) {
+        cerr << "Error: could not write SRT file: " << srt_path << endl;
+        return;
+    }
+
+    cout << "Writing timecodes to SRT file... " << srt_path << endl;
+
+    int previous_time = 0;
+    for (size_t i = 0; i < dates.size(); ++i) {
+        const auto &d = dates[i]; // {day, month, year, hour, min, sec}
+        f << (i + 1) << "\n";
+        f << format_seconds(previous_time) << " --> " << format_seconds(previous_time + 1) << "\n";
+        f << setfill('0') << setw(2) << d[0] << "/" << setw(2) << d[1] << "/" << d[2] << "\n";
+        f << setw(2) << d[3] << ":" << setw(2) << d[4] << ":" << setw(2) << d[5] << setfill(' ') << "\n";
+        f << "\n";
+        previous_time += 1;
+    }
+}
+
 int main(int argc, char* argv[]) {
-    if (argc < 2) {
-        cerr << "dv2str <video_file_path> <-debug>" << endl;
+    string file_path;
+    for (int i = 1; i < argc; ++i) {
+        string arg = argv[i];
+        if (arg == "-debug") {
+            debug = true;
+        } else if (arg == "-pivot") {
+            if (i + 1 >= argc) {
+                cerr << "Error: -pivot requires a value (0-99)." << endl;
+                return 1;
+            }
+            century_pivot = atoi(argv[++i]);
+        } else if (arg.rfind("-pivot=", 0) == 0) {
+            century_pivot = atoi(arg.c_str() + 7);
+        } else if (!arg.empty() && arg[0] != '-') {
+            file_path = arg;
+        } else {
+            cerr << "Error: unknown option '" << arg << "'." << endl;
+            return 1;
+        }
+    }
+
+    if (file_path.empty()) {
+        cerr << "dv2str <video_file_path> [-debug] [-pivot <0-99>]" << endl;
         return 1;
     }
 
-    debug = (argc == 3);
+    if (century_pivot < 0 || century_pivot > 99) {
+        cerr << "Error: -pivot must be between 0 and 99." << endl;
+        return 1;
+    }
 
-    string file_path = argv[1];
     auto timecodes = parse_avi_file(file_path);
 
+    // Count how often each distinct date/time appears, keeping only those that
+    // recur (>= 3 frames) to filter out transient decode noise.
     map<vector<int>, size_t> occurrences;
     for (const auto &timecode : timecodes) {
         ++occurrences[timecode];
     }
 
-    bool has_repeated_timecode = false;
+    vector<vector<int>> repeated; // each: {day, month, year, hour, min, sec}
     for (const auto &[timecode, count] : occurrences) {
         if (count >= 3) {
-            has_repeated_timecode = true;
-            cout << "Timecode: ";
-            for (int part : timecode) {
-                cout << part << " ";
-            }
-            cout << endl;
+            repeated.push_back(timecode);
         }
     }
 
-    if (!has_repeated_timecode) {
+    if (repeated.empty()) {
         cerr << "Warning: no valid repeated date/time packets (0x62/0x63) were found; file cannot be processed." << endl;
         return 1;
     }
+
+    // Sort chronologically: year, month, day, hour, minute, second.
+    sort(repeated.begin(), repeated.end(), [](const vector<int> &a, const vector<int> &b) {
+        return tie(a[2], a[1], a[0], a[3], a[4], a[5]) < tie(b[2], b[1], b[0], b[3], b[4], b[5]);
+    });
+
+    for (const auto &d : repeated) {
+        cout << setfill('0') << setw(2) << d[0] << "/" << setw(2) << d[1] << "/" << d[2]
+             << " " << setw(2) << d[3] << ":" << setw(2) << d[4] << ":" << setw(2) << d[5]
+             << setfill(' ') << endl;
+    }
+
+    write_dates_to_srt(repeated, file_path);
 
     return 0;
 }
