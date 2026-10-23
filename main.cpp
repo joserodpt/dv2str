@@ -287,12 +287,21 @@ vector<vector<int>> parse_avi_file(const string &file_path) {
         return {};
     }
 
+    // File offset of the 'movi' fourcc. idx1 offsets are either absolute file
+    // offsets or relative to this position (the AVI 1.0 spec convention), so
+    // it is needed to resolve relative entries.
+    size_t movi_offset = 0;
+
     while (true) {
-        vector<uint8_t> chunk_header = read_chunk(file, offset, 8);
+        vector<uint8_t> chunk_header = read_chunk(file, offset, 12);
         if (chunk_header.size() < 8) break; // End of file
 
         string chunk_id = read_string(chunk_header, 0);
         uint32_t chunk_size = read_int(chunk_header, 4);
+
+        if (chunk_id == "LIST" && chunk_header.size() == 12 && read_string(chunk_header, 8) == "movi") {
+            movi_offset = offset + 8;
+        }
 
         if (chunk_id == "idx1") {
             auto idx1_entries = parse_idx1(file, offset);
@@ -316,10 +325,19 @@ vector<vector<int>> parse_avi_file(const string &file_path) {
                     // header so the DV frame is read with the correct alignment.
                     // Without this the whole frame is shifted by 8 bytes and the
                     // 0x62/0x63 date/time packs are never found.
+                    //
+                    // Other files (following the AVI 1.0 spec) store offsets
+                    // relative to the 'movi' fourcc instead of the file start;
+                    // if the fourcc is not at the absolute offset, try there.
                     size_t data_offset = stream_offset;
                     vector<uint8_t> hdr = read_chunk(file, stream_offset, 4);
                     if (hdr.size() == 4 && read_string(hdr, 0) == stream_id) {
                         data_offset = stream_offset + 8;
+                    } else if (movi_offset != 0) {
+                        hdr = read_chunk(file, movi_offset + stream_offset, 4);
+                        if (hdr.size() == 4 && read_string(hdr, 0) == stream_id) {
+                            data_offset = movi_offset + stream_offset + 8;
+                        }
                     }
 
                     file.seekg(data_offset);
